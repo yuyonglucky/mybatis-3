@@ -1,5 +1,5 @@
-/*
- *    Copyright 2009-2013 the original author or authors.
+/**
+ *    Copyright 2009-2015 the original author or authors.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -106,7 +106,7 @@ public class XMLMapperBuilder extends BaseBuilder {
   private void configurationElement(XNode context) {
     try {
       String namespace = context.getStringAttribute("namespace");
-      if (namespace.equals("")) {
+      if (namespace == null || namespace.equals("")) {
         throw new BuilderException("Mapper's namespace cannot be empty");
       }
       builderAssistant.setCurrentNamespace(namespace);
@@ -205,8 +205,9 @@ public class XMLMapperBuilder extends BaseBuilder {
       Long flushInterval = context.getLongAttribute("flushInterval");
       Integer size = context.getIntAttribute("size");
       boolean readWrite = !context.getBooleanAttribute("readOnly", false);
+      boolean blocking = context.getBooleanAttribute("blocking", false);
       Properties props = context.getChildrenAsProperties();
-      builderAssistant.useNewCache(typeClass, evictionClass, flushInterval, size, readWrite, props);
+      builderAssistant.useNewCache(typeClass, evictionClass, flushInterval, size, readWrite, blocking, props);
     }
   }
 

@@ -1,5 +1,5 @@
-/*
- *    Copyright 2009-2014 the original author or authors.
+/**
+ *    Copyright 2009-2015 the original author or authors.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -16,26 +16,40 @@
 package org.apache.ibatis.cache.decorators;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.locks.ReadWriteLock;
 
 import org.apache.ibatis.cache.Cache;
+import org.apache.ibatis.logging.Log;
+import org.apache.ibatis.logging.LogFactory;
 
 /**
+ * The 2nd level cache transactional buffer.
+ * 
+ * This class holds all cache entries that are to be added to the 2nd level cache during a Session.
+ * Entries are sent to the cache when commit is called or discarded if the Session is rolled back. 
+ * Blocking cache support has been added. Therefore any get() that returns a cache miss 
+ * will be followed by a put() so any lock associated with the key can be released. 
+ * 
  * @author Clinton Begin
+ * @author Eduardo Macarron
  */
 public class TransactionalCache implements Cache {
 
+  private static final Log log = LogFactory.getLog(TransactionalCache.class);
+
   private Cache delegate;
   private boolean clearOnCommit;
-  private Map<Object, AddEntry> entriesToAddOnCommit;
-  private Map<Object, RemoveEntry> entriesToRemoveOnCommit;
+  private Map<Object, Object> entriesToAddOnCommit;
+  private Set<Object> entriesMissedInCache;
 
   public TransactionalCache(Cache delegate) {
     this.delegate = delegate;
     this.clearOnCommit = false;
-    this.entriesToAddOnCommit = new HashMap<Object, AddEntry>();
-    this.entriesToRemoveOnCommit = new HashMap<Object, RemoveEntry>();
+    this.entriesToAddOnCommit = new HashMap<Object, Object>();
+    this.entriesMissedInCache = new HashSet<Object>();
   }
 
   @Override
@@ -50,8 +64,17 @@ public class TransactionalCache implements Cache {
 
   @Override
   public Object getObject(Object key) {
+    // issue #116
+    Object object = delegate.getObject(key);
+    if (object == null) {
+      entriesMissedInCache.add(key);
+    }
     // issue #146
-    return clearOnCommit ? null : delegate.getObject(key);
+    if (clearOnCommit) {
+      return null;
+    } else {
+      return object;
+    }
   }
 
   @Override
@@ -61,74 +84,58 @@ public class TransactionalCache implements Cache {
 
   @Override
   public void putObject(Object key, Object object) {
-    entriesToRemoveOnCommit.remove(key);
-    entriesToAddOnCommit.put(key, new AddEntry(delegate, key, object));
+    entriesToAddOnCommit.put(key, object);
   }
 
   @Override
   public Object removeObject(Object key) {
-    entriesToAddOnCommit.remove(key);
-    entriesToRemoveOnCommit.put(key, new RemoveEntry(delegate, key));
-    return delegate.getObject(key);
+    return null;
   }
 
   @Override
   public void clear() {
-    reset();
     clearOnCommit = true;
+    entriesToAddOnCommit.clear();
   }
 
   public void commit() {
     if (clearOnCommit) {
       delegate.clear();
-    } else {
-      for (RemoveEntry entry : entriesToRemoveOnCommit.values()) {
-        entry.commit();
-      }
     }
-    for (AddEntry entry : entriesToAddOnCommit.values()) {
-      entry.commit();
-    }
+    flushPendingEntries();
     reset();
   }
 
   public void rollback() {
+    unlockMissedEntries();
     reset();
   }
 
   private void reset() {
     clearOnCommit = false;
-    entriesToRemoveOnCommit.clear();
     entriesToAddOnCommit.clear();
+    entriesMissedInCache.clear();
   }
 
-  private static class AddEntry {
-    private Cache cache;
-    private Object key;
-    private Object value;
-
-    public AddEntry(Cache cache, Object key, Object value) {
-      this.cache = cache;
-      this.key = key;
-      this.value = value;
+  private void flushPendingEntries() {
+    for (Map.Entry<Object, Object> entry : entriesToAddOnCommit.entrySet()) {
+      delegate.putObject(entry.getKey(), entry.getValue());
     }
-
-    public void commit() {
-      cache.putObject(key, value);
+    for (Object entry : entriesMissedInCache) {
+      if (!entriesToAddOnCommit.containsKey(entry)) {
+        delegate.putObject(entry, null);
+      }
     }
   }
 
-  private static class RemoveEntry {
-    private Cache cache;
-    private Object key;
-
-    public RemoveEntry(Cache cache, Object key) {
-      this.cache = cache;
-      this.key = key;
-    }
-
-    public void commit() {
-      cache.removeObject(key);
+  private void unlockMissedEntries() {
+    for (Object entry : entriesMissedInCache) {
+      try {
+        delegate.removeObject(entry);
+      } catch (Exception e) {
+        log.warn("Unexpected exception while notifiying a rollback to the cache adapter."
+            + "Consider upgrading your cache adapter to the latest version.  Cause: " + e);
+      }
     }
   }
 

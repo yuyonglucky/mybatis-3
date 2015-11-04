@@ -1,5 +1,5 @@
-/*
- *    Copyright 2009-2014 the original author or authors.
+/**
+ *    Copyright 2009-2015 the original author or authors.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -174,7 +174,7 @@ public class MapperAnnotationBuilder {
     if (cacheDomain != null) {
       Integer size = cacheDomain.size() == 0 ? null : cacheDomain.size();
       Long flushInterval = cacheDomain.flushInterval() == 0 ? null : cacheDomain.flushInterval();
-      assistant.useNewCache(cacheDomain.implementation(), cacheDomain.eviction(), flushInterval, size, cacheDomain.readWrite(), null);
+      assistant.useNewCache(cacheDomain.implementation(), cacheDomain.eviction(), flushInterval, size, cacheDomain.readWrite(), cacheDomain.blocking(), null);
     }
   }
 
@@ -196,6 +196,10 @@ public class MapperAnnotationBuilder {
   }
 
   private String generateResultMapName(Method method) {
+    Results results = method.getAnnotation(Results.class);
+    if (results != null && !results.id().isEmpty()) {
+      return type.getName() + "." + results.id();
+    }
     StringBuilder suffix = new StringBuilder();
     for (Class<?> c : method.getParameterTypes()) {
       suffix.append("-");
@@ -436,7 +440,7 @@ public class MapperAnnotationBuilder {
       sql.append(fragment);
       sql.append(" ");
     }
-    return languageDriver.createSqlSource(configuration, sql.toString(), parameterTypeClass);
+    return languageDriver.createSqlSource(configuration, sql.toString().trim(), parameterTypeClass);
   }
 
   private SqlCommandType getSqlCommandType(Method method) {
